@@ -1,0 +1,263 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include "app_state.h"
+#include "segment_defs.h"
+
+// PIN MAPPING
+#define TPIC_LATCH  1 // 0
+#define TPIC_CLOCK  0 //1
+#define TPIC_G      4 //3
+#define TPIC_DATA   3 //4
+#define KEYPAD_INT  7
+
+// OLED SETTINGS
+#define OFFSET_X 28
+#define OFFSET_Y 24
+#define PHYS_W 72
+#define PHYS_H 40
+Adafruit_SSD1306 display(128, 64, &Wire, -1);
+bool gOledOk = false;
+
+void showSegments(const byte segs[kDigits]);
+
+// KEYPAD SETTINGS (PCF8574)
+const uint8_t kPcfAddr = 0x20;
+const uint8_t kRowMask = 0x0F;
+const uint8_t kColMask = 0xF0;
+
+static const char KEYMAP[4][4] = {
+  {'A','3','2','1'},
+  {'B','6','5','4'},
+  {'C','9','8','7'},
+  {'D','#','0','*'}
+};
+
+// Safe without atomic ops: ESP32-C3 is single-core, and bool read/write is atomic on RISC-V.
+volatile bool gKeyPending = false;
+bool gDebouncing = false;
+const byte kFlipMask = 0b0100; // Flip pos2 (third from left)
+
+byte rotate180(byte v) {
+  byte out = 0;
+  if (v & SEG_A) out |= SEG_D;
+  if (v & SEG_B) out |= SEG_E;
+  if (v & SEG_C) out |= SEG_F;
+  if (v & SEG_D) out |= SEG_A;
+  if (v & SEG_E) out |= SEG_B;
+  if (v & SEG_F) out |= SEG_C;
+  if (v & SEG_G) out |= SEG_G;
+  if (v & SEG_DP) out |= SEG_DP;
+  return out;
+}
+
+
+void writePcf(uint8_t value) {
+  Wire.beginTransmission(kPcfAddr);
+  Wire.write(value);
+  Wire.endTransmission();
+}
+
+uint8_t readPcf() {
+  Wire.requestFrom(kPcfAddr, (uint8_t)1);
+  if (Wire.available()) {
+    return Wire.read();
+  }
+  return 0xFF;
+}
+
+void showSegments(const byte segs[kDigits]) {
+  digitalWrite(TPIC_LATCH, LOW);
+  for (int pos = kDigits - 1; pos >= 0; pos--) {
+    byte out = segs[pos];
+    if (kFlipMask & (1 << pos)) {
+      out = rotate180(out);
+    }
+    shiftOut(TPIC_DATA, TPIC_CLOCK, MSBFIRST, out);
+  }
+  digitalWrite(TPIC_LATCH, HIGH);
+}
+
+void playSnakeAnimation() {
+  const byte snakeSegs[] = {SEG_A, SEG_B, SEG_C, SEG_D, SEG_E, SEG_F};
+  const int snakeLen = sizeof(snakeSegs) / sizeof(snakeSegs[0]);
+  const int frames = 24;
+  byte segs[kDigits];
+  for (int f = 0; f < frames; f++) {
+    for (int i = 0; i < kDigits; i++) {
+      int idx = (f + i * 2) % snakeLen;
+      segs[i] = snakeSegs[idx];
+    }
+    showSegments(segs);
+    delay(60);
+  }
+}
+
+void renderOled(const AppState &s) {
+  if (!gOledOk) return;
+  display.clearDisplay();
+  display.setTextSize(1);
+
+  const char *status;
+  if (s.paused) {
+    status = "Paused";
+  } else {
+    switch (s.mode) {
+      case MODE_IDLE:         status = s.digitLen > 0 ? "Entry" : "Idle"; break;
+      case MODE_PRECOUNTDOWN: status = "Starting"; break;
+      case MODE_COUNTDOWN:    status = "Count DN"; break;
+      case MODE_COUNTUP:      status = "Count UP"; break;
+      case MODE_FLASH_ZERO:   status = "Done!"; break;
+      default:                status = ""; break;
+    }
+  }
+  display.setCursor(OFFSET_X + 4, OFFSET_Y + 4);
+  display.print(status);
+
+  if (s.mode == MODE_COUNTDOWN || s.mode == MODE_COUNTUP || s.mode == MODE_FLASH_ZERO) {
+    char timeBuf[6];
+    snprintf(timeBuf, sizeof(timeBuf), "%d:%02d", s.countdownMin, s.countdownSec);
+    display.setCursor(OFFSET_X + 4, OFFSET_Y + 16);
+    display.print(timeBuf);
+  }
+
+  display.setCursor(OFFSET_X + 4, OFFSET_Y + 28);
+  display.print(s.keyLog);
+
+  display.display();
+}
+
+void IRAM_ATTR onKeyInt() {
+  gKeyPending = true;
+}
+
+void armForInt() {
+  writePcf(0x0F);
+}
+
+char scanKeypadOnce() {
+  for (int col = 0; col < 4; col++) {
+    uint8_t out = 0xFF;
+    out &= ~(1 << (4 + col));
+    writePcf(out);
+    delayMicroseconds(20);
+    uint8_t in = readPcf();
+    uint8_t rows = in & kRowMask;
+    for (int row = 0; row < 4; row++) {
+      if ((rows & (1 << row)) == 0) {
+        return KEYMAP[row][col];
+      }
+    }
+  }
+  return 0;
+}
+
+char readKeypad() {
+  static char lastStable = 0;
+  static char lastRead = 0;
+  static unsigned long lastChange = 0;
+
+  char key = scanKeypadOnce();
+  unsigned long now = millis();
+  if (key != lastRead) {
+    lastRead = key;
+    lastChange = now;
+  }
+  gDebouncing = (now - lastChange) < 25;
+  if (key != 0 && (now - lastChange) >= 25 && key != lastStable) {
+    lastStable = key;
+    return key;
+  }
+  if (key == 0 && (now - lastChange) >= 25) {
+    lastStable = 0;
+  }
+  return 0;
+}
+
+void setup() {
+  // TPIC Setup
+  pinMode(TPIC_DATA, OUTPUT);
+  pinMode(TPIC_CLOCK, OUTPUT);
+  pinMode(TPIC_LATCH, OUTPUT);
+  pinMode(TPIC_G, OUTPUT);
+  pinMode(KEYPAD_INT, INPUT_PULLUP);
+
+  // 80% brightness via PWM on /G (active low).
+  const int kPwmFreq = 5000;
+  const int kPwmResolution = 8;
+  const int kDuty = 255 - 204;
+  ledcAttach(TPIC_G, kPwmFreq, kPwmResolution);
+  ledcWrite(TPIC_G, kDuty);
+
+  // OLED Setup
+  Wire.begin(5, 6);
+  for (int attempt = 0; attempt < 5 && !gOledOk; attempt++) {
+    gOledOk = display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+    if (!gOledOk) delay(50);
+  }
+  if (gOledOk) {
+    display.clearDisplay();
+    display.setTextColor(SSD1306_WHITE);
+  }
+
+  writePcf(0xFF);
+  attachInterrupt(digitalPinToInterrupt(KEYPAD_INT), onKeyInt, FALLING);
+  armForInt();
+  readPcf();
+  playSnakeAnimation();
+  byte idleSegs[kDigits];
+  buildIdleSegments("", 0, idleSegs);
+  showSegments(idleSegs);
+}
+
+void loop() {
+  static AppState s;
+  static bool initialized = false;
+  if (!initialized) {
+    initState(s);
+    initialized = true;
+  }
+
+  unsigned long now = millis();
+
+  updateMode(s, now);
+
+  char key = 0;
+  if (gKeyPending) {
+    key = readKeypad();
+    armForInt();
+    readPcf();
+    handleKey(s, key, now);
+    if (key == 0 && !gDebouncing && digitalRead(KEYPAD_INT) == HIGH) {
+      gKeyPending = false;
+    }
+  }
+
+  if (s.segsDirty) {
+    showSegments(s.segs);
+    s.segsDirty = false;
+  }
+
+  if (s.oledDirty || (now - s.lastOled) >= 200) {
+    renderOled(s);
+    s.lastOled = now;
+    s.oledDirty = false;
+  }
+
+#if !KEY_TEST_MODE
+  if (s.mode == MODE_IDLE && !gKeyPending) {
+    bool blinkOn = (now / 500) % 2 == 0;
+    for (int i = 0; i < kDigits; i++) s.segs[i] = 0;
+    if (s.digitLen == 0) {
+      if (blinkOn) s.segs[1] = SEG_D;
+    } else if (blinkOn) {
+      int offset = 2 - s.digitLen;
+      for (int i = 0; i < s.digitLen; i++) {
+        s.segs[offset + i] = segmentMap[s.digitBuf[i] - '0'];
+      }
+    }
+    s.segsDirty = true;
+  }
+#endif
+}
