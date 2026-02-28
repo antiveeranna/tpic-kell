@@ -93,7 +93,7 @@ void renderOled(const AppState &s) {
 
   if (s.mode == MODE_COUNTDOWN || s.mode == MODE_COUNTUP || s.mode == MODE_FLASH_ZERO) {
     char timeBuf[6];
-    snprintf(timeBuf, sizeof(timeBuf), "%d:%02d", s.displayMin, s.displaySec);
+    snprintf(timeBuf, sizeof(timeBuf), "%d:%02d", s.displayMin(), s.displaySec());
     display.setCursor(OFFSET_X + 4, OFFSET_Y + 16);
     display.print(timeBuf);
   }
@@ -150,7 +150,7 @@ void loop() {
     bool blinkOn = ((now - blinkBase) / 500) % 2 == 0;
     if (blinkOn != lastBlink || s.segsDirty) {
       lastBlink = blinkOn;
-      for (int i = 0; i < kDigits; i++) s.segs[i] = 0;
+      memset(s.segs, 0, sizeof(s.segs));
       if (s.digitLen == 0) {
         if (blinkOn) s.segs[1] = SEG_D;
       } else if (blinkOn) {
