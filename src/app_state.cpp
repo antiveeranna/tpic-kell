@@ -40,16 +40,6 @@ static void buildTimeSegments(int minutes, int seconds, bool colonOn, bool blank
   }
 }
 
-void buildIdleSegments(const char *digits, int len, byte out[kDigits]) {
-  for (int i = 0; i < kDigits; i++) {
-    out[i] = SEG_D;
-  }
-  int offset = 2 - len;
-  for (int i = 0; i < len && i < kDigits; i++) {
-    out[offset + i] = keyToSegments(digits[i]);
-  }
-}
-
 static void appendKeyLog(AppState &s, char key) {
   size_t len = strlen(s.keyLog);
   if (len >= sizeof(s.keyLog) - 1) {
@@ -63,14 +53,13 @@ static void appendKeyLog(AppState &s, char key) {
 
 void initState(AppState &s) {
   s.mode = MODE_IDLE;
-  for (int i = 0; i < kDigits; i++) s.segs[i] = SEG_D;
+  for (int i = 0; i < kDigits; i++) s.segs[i] = 0;
   s.keyLog[0] = '\0';
   s.lastOled = 0;
   s.lastTick = 0;
   s.lastPhase = 0;
-  s.countdownMin = 0;
-  s.countdownSec = 0;
-  s.preStep = 3;
+  s.displayMin = 0;
+  s.displaySec = 0;
   s.postFlashSec = 0;
   s.flashOn = true;
   s.digitBuf[0] = 0;
@@ -108,19 +97,19 @@ void updateMode(AppState &s, unsigned long now) {
     if (now - s.lastTick >= 1000) {
       s.lastTick += 1000;
       s.colonOn = !s.colonOn;
-      if (s.countdownSec == 0) {
-        if (s.countdownMin > 0) {
-          s.countdownMin--;
-          s.countdownSec = 59;
+      if (s.displaySec == 0) {
+        if (s.displayMin > 0) {
+          s.displayMin--;
+          s.displaySec = 59;
         }
       } else {
-        s.countdownSec--;
+        s.displaySec--;
       }
     }
-    buildTimeSegments(s.countdownMin, s.countdownSec, s.colonOn, true, s.segs);
+    buildTimeSegments(s.displayMin, s.displaySec, s.colonOn, true, s.segs);
     s.segsDirty = true;
 
-    int totalSec = s.countdownMin * 60 + s.countdownSec;
+    int totalSec = s.displayMin * 60 + s.displaySec;
     if (totalSec <= 10 && s.mode != MODE_FLASH_ZERO) {
       s.mode = MODE_FLASH_ZERO;
       s.postFlashSec = 10;
@@ -131,16 +120,16 @@ void updateMode(AppState &s, unsigned long now) {
     if (now - s.lastTick >= 1000) {
       s.lastTick += 1000;
       s.colonOn = !s.colonOn;
-      s.countdownSec++;
-      if (s.countdownSec >= 60) {
-        s.countdownSec = 0;
-        s.countdownMin++;
+      s.displaySec++;
+      if (s.displaySec >= 60) {
+        s.displaySec = 0;
+        s.displayMin++;
       }
     }
-    buildTimeSegments(s.countdownMin, s.countdownSec, s.colonOn, true, s.segs);
+    buildTimeSegments(s.displayMin, s.displaySec, s.colonOn, true, s.segs);
     s.segsDirty = true;
 
-    if (s.countdownMin >= s.targetMin && s.countdownSec == 0 && s.countdownMin > 0) {
+    if (s.displayMin >= s.targetMin && s.displaySec == 0 && s.displayMin > 0) {
       s.mode = MODE_FLASH_ZERO;
       s.postFlashSec = 10;
       s.flashOn = true;
@@ -151,7 +140,7 @@ void updateMode(AppState &s, unsigned long now) {
       s.lastPhase = now;
       s.flashOn = !s.flashOn;
       if (s.flashOn) {
-        buildTimeSegments(s.countdownMin, s.countdownSec, s.colonOn, true, s.segs);
+        buildTimeSegments(s.displayMin, s.displaySec, s.colonOn, true, s.segs);
       } else {
         for (int i = 0; i < kDigits; i++) s.segs[i] = 0;
       }
@@ -162,12 +151,12 @@ void updateMode(AppState &s, unsigned long now) {
       s.lastTick += 1000;
       s.colonOn = !s.colonOn;
       if (!s.countingUp) {
-        if (s.countdownMin > 0 || s.countdownSec > 0) {
-          if (s.countdownSec == 0) {
-            s.countdownMin--;
-            s.countdownSec = 59;
+        if (s.displayMin > 0 || s.displaySec > 0) {
+          if (s.displaySec == 0) {
+            s.displayMin--;
+            s.displaySec = 59;
           } else {
-            s.countdownSec--;
+            s.displaySec--;
           }
         }
       }
@@ -176,22 +165,56 @@ void updateMode(AppState &s, unsigned long now) {
 
     if (s.postFlashSec == 0) {
       s.mode = MODE_IDLE;
-      buildIdleSegments(s.digitBuf, s.digitLen, s.segs);
+      for (int i = 0; i < kDigits; i++) s.segs[i] = 0;
       s.segsDirty = true;
     }
   }
+}
+
+static int parseDigits(const AppState &s) {
+  if (s.digitLen == 1) return s.digitBuf[0] - '0';
+  return (s.digitBuf[0] - '0') * 10 + (s.digitBuf[1] - '0');
+}
+
+static void startTimer(AppState &s, bool up, unsigned long now) {
+  int mins = parseDigits(s);
+  if (up) {
+    s.targetMin = mins;
+    s.displayMin = 0;
+    s.displaySec = 0;
+  } else {
+    s.displayMin = mins;
+    s.displaySec = 0;
+  }
+  s.countingUp = up;
+  s.paused = false;
+  s.prePos = 0;
+  s.lastPhase = now - 1000;
+  s.mode = MODE_PRECOUNTDOWN;
+  s.postFlashSec = 0;
+  s.digitLen = 0;
+  s.keyLog[0] = '\0';
 }
 
 void handleKey(AppState &s, char key, unsigned long now) {
   if (key == 0) return;
   appendKeyLog(s, key);
 
+  if (s.mode == MODE_PRECOUNTDOWN) {
+    s.mode = MODE_IDLE;
+    s.digitLen = 0;
+    for (int i = 0; i < kDigits; i++) s.segs[i] = 0;
+    s.segsDirty = true;
+    s.lastKey = key;
+    return;
+  }
+
   if (s.mode == MODE_COUNTDOWN || s.mode == MODE_COUNTUP || s.mode == MODE_FLASH_ZERO) {
     if (key == '*' && s.lastKey == '*') {
       s.mode = MODE_IDLE;
       s.paused = false;
       s.digitLen = 0;
-      buildIdleSegments(s.digitBuf, s.digitLen, s.segs);
+      for (int i = 0; i < kDigits; i++) s.segs[i] = 0;
       s.segsDirty = true;
     } else {
       s.paused = !s.paused;
@@ -212,39 +235,14 @@ void handleKey(AppState &s, char key, unsigned long now) {
         s.digitBuf[0] = s.digitBuf[1];
         s.digitBuf[1] = key;
       }
+      s.segsDirty = true;
     } else if (key == 'A' && s.digitLen >= 1) {
-      if (s.digitLen == 1) {
-        s.countdownMin = s.digitBuf[0] - '0';
-      } else {
-        s.countdownMin = (s.digitBuf[0] - '0') * 10 + (s.digitBuf[1] - '0');
-      }
-      s.countdownSec = 0;
-      s.countingUp = false;
-      s.paused = false;
-      s.prePos = 0;
-      s.lastPhase = now - (1000 / kDigits);
-      s.mode = MODE_PRECOUNTDOWN;
-      s.postFlashSec = 0;
-      s.digitLen = 0;
-      s.keyLog[0] = '\0';
+      startTimer(s, false, now);
     } else if (key == 'B' && s.digitLen >= 1) {
-      if (s.digitLen == 1) {
-        s.targetMin = s.digitBuf[0] - '0';
-      } else {
-        s.targetMin = (s.digitBuf[0] - '0') * 10 + (s.digitBuf[1] - '0');
-      }
-      s.countdownMin = 0;
-      s.countdownSec = 0;
-      s.countingUp = true;
-      s.paused = false;
-      s.prePos = 0;
-      s.lastPhase = now - (1000 / kDigits);
-      s.mode = MODE_PRECOUNTDOWN;
-      s.postFlashSec = 0;
-      s.digitLen = 0;
-      s.keyLog[0] = '\0';
+      startTimer(s, true, now);
     } else {
       s.digitLen = 0;
+      s.segsDirty = true;
     }
   }
 }

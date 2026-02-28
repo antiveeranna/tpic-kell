@@ -15,8 +15,6 @@
 // OLED SETTINGS
 #define OFFSET_X 28
 #define OFFSET_Y 24
-#define PHYS_W 72
-#define PHYS_H 40
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
 bool gOledOk = false;
 
@@ -25,7 +23,7 @@ void showSegments(const byte segs[kDigits]);
 // KEYPAD SETTINGS (PCF8574)
 const uint8_t kPcfAddr = 0x20;
 const uint8_t kRowMask = 0x0F;
-const uint8_t kColMask = 0xF0;
+
 
 static const char KEYMAP[4][4] = {
   {'A','3','2','1'},
@@ -117,7 +115,7 @@ void renderOled(const AppState &s) {
 
   if (s.mode == MODE_COUNTDOWN || s.mode == MODE_COUNTUP || s.mode == MODE_FLASH_ZERO) {
     char timeBuf[6];
-    snprintf(timeBuf, sizeof(timeBuf), "%d:%02d", s.countdownMin, s.countdownSec);
+    snprintf(timeBuf, sizeof(timeBuf), "%d:%02d", s.displayMin, s.displaySec);
     display.setCursor(OFFSET_X + 4, OFFSET_Y + 16);
     display.print(timeBuf);
   }
@@ -206,9 +204,6 @@ void setup() {
   armForInt();
   readPcf();
   playSnakeAnimation();
-  byte idleSegs[kDigits];
-  buildIdleSegments("", 0, idleSegs);
-  showSegments(idleSegs);
 }
 
 void loop() {
@@ -234,6 +229,26 @@ void loop() {
     }
   }
 
+  if (s.mode == MODE_IDLE) {
+    static unsigned long blinkBase = 0;
+    static bool lastBlink = false;
+    if (s.segsDirty) blinkBase = now;
+    bool blinkOn = ((now - blinkBase) / 500) % 2 == 0;
+    if (blinkOn != lastBlink || s.segsDirty) {
+      lastBlink = blinkOn;
+      for (int i = 0; i < kDigits; i++) s.segs[i] = 0;
+      if (s.digitLen == 0) {
+        if (blinkOn) s.segs[1] = SEG_D;
+      } else if (blinkOn) {
+        int offset = 2 - s.digitLen;
+        for (int i = 0; i < s.digitLen; i++) {
+          s.segs[offset + i] = segmentMap[s.digitBuf[i] - '0'];
+        }
+      }
+      s.segsDirty = true;
+    }
+  }
+
   if (s.segsDirty) {
     showSegments(s.segs);
     s.segsDirty = false;
@@ -243,19 +258,5 @@ void loop() {
     renderOled(s);
     s.lastOled = now;
     s.oledDirty = false;
-  }
-
-  if (s.mode == MODE_IDLE && !gKeyPending) {
-    bool blinkOn = (now / 500) % 2 == 0;
-    for (int i = 0; i < kDigits; i++) s.segs[i] = 0;
-    if (s.digitLen == 0) {
-      if (blinkOn) s.segs[1] = SEG_D;
-    } else if (blinkOn) {
-      int offset = 2 - s.digitLen;
-      for (int i = 0; i < s.digitLen; i++) {
-        s.segs[offset + i] = segmentMap[s.digitBuf[i] - '0'];
-      }
-    }
-    s.segsDirty = true;
   }
 }
