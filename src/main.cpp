@@ -4,6 +4,7 @@
 #include <Adafruit_SSD1306.h>
 #include "app_state.h"
 #include "segment_defs.h"
+#include "keypad.h"
 
 // PIN MAPPING
 #define TPIC_LATCH  1
@@ -18,28 +19,14 @@
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
 bool gOledOk = false;
 static AppState gState;
+static Keypad keypad;
 
 void showSegments(const byte segs[kDigits]);
-
-// KEYPAD SETTINGS (PCF8574)
-const uint8_t kPcfAddr = 0x20;
-const uint8_t kRowMask = 0x0F;
-
-
-static const char KEYMAP[4][4] = {
-  {'A','3','2','1'},
-  {'B','6','5','4'},
-  {'C','9','8','7'},
-  {'D','#','0','*'}
-};
 
 // Brightness duty cycles for /G (active low: higher = dimmer)
 const int kDutyNormal = 255 - 204; // ~80%
 const int kDutyDimmed = 255 - 25;  // ~10%
 
-// Safe without atomic ops: ESP32-C3 is single-core, and bool read/write is atomic on RISC-V.
-volatile bool gKeyPending = false;
-bool gDebouncing = false;
 const byte kFlipMask = 0b0100; // Flip pos2 (third from left)
 
 byte rotate180(byte v) {
@@ -55,20 +42,6 @@ byte rotate180(byte v) {
   return out;
 }
 
-
-void writePcf(uint8_t value) {
-  Wire.beginTransmission(kPcfAddr);
-  Wire.write(value);
-  Wire.endTransmission();
-}
-
-uint8_t readPcf() {
-  Wire.requestFrom(kPcfAddr, (uint8_t)1);
-  if (Wire.available()) {
-    return Wire.read();
-  }
-  return 0xFF;
-}
 
 void showSegments(const byte segs[kDigits]) {
   digitalWrite(TPIC_LATCH, LOW);
@@ -131,53 +104,6 @@ void renderOled(const AppState &s) {
   display.display();
 }
 
-void IRAM_ATTR onKeyInt() {
-  gKeyPending = true;
-}
-
-void armForInt() {
-  writePcf(0x0F);
-}
-
-char scanKeypadOnce() {
-  for (int col = 0; col < 4; col++) {
-    uint8_t out = 0xFF;
-    out &= ~(1 << (4 + col));
-    writePcf(out);
-    delayMicroseconds(20);
-    uint8_t in = readPcf();
-    uint8_t rows = in & kRowMask;
-    for (int row = 0; row < 4; row++) {
-      if ((rows & (1 << row)) == 0) {
-        return KEYMAP[row][col];
-      }
-    }
-  }
-  return 0;
-}
-
-char readKeypad() {
-  static char lastStable = 0;
-  static char lastRead = 0;
-  static unsigned long lastChange = 0;
-
-  char key = scanKeypadOnce();
-  unsigned long now = millis();
-  if (key != lastRead) {
-    lastRead = key;
-    lastChange = now;
-  }
-  gDebouncing = (now - lastChange) < 25;
-  if (key != 0 && (now - lastChange) >= 25 && key != lastStable) {
-    lastStable = key;
-    return key;
-  }
-  if (key == 0 && (now - lastChange) >= 25) {
-    lastStable = 0;
-  }
-  return 0;
-}
-
 void setup() {
   // TPIC Setup
   pinMode(TPIC_DATA, OUTPUT);
@@ -203,10 +129,7 @@ void setup() {
     display.setTextColor(SSD1306_WHITE);
   }
 
-  writePcf(0xFF);
-  attachInterrupt(digitalPinToInterrupt(KEYPAD_INT), onKeyInt, FALLING);
-  armForInt();
-  readPcf();
+  keypad.begin(KEYPAD_INT);
   initState(gState);
   playSnakeAnimation();
 }
@@ -217,16 +140,8 @@ void loop() {
 
   updateMode(s, now);
 
-  char key = 0;
-  if (gKeyPending) {
-    key = readKeypad();
-    armForInt();
-    readPcf();
-    handleKey(s, key, now);
-    if (key == 0 && !gDebouncing && digitalRead(KEYPAD_INT) == HIGH) {
-      gKeyPending = false;
-    }
-  }
+  char key = keypad.poll();
+  if (key) handleKey(s, key, now);
 
   if (s.mode == MODE_IDLE) {
     static unsigned long blinkBase = 0;
