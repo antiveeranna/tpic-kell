@@ -18,15 +18,15 @@ static void tickTime(AppState &s, int delta) {
 
 static void buildTimeSegments(int totalSec, bool colonOn,
                                bool blankLead, byte out[kDigits]) {
-  int mT = totalSec / 600;
-  int mO = (totalSec / 60) % 10;
-  int sT = (totalSec % 60) / 10;
-  int sO = totalSec % 10;
+  int minTens = totalSec / 600;
+  int minOnes = (totalSec / 60) % 10;
+  int secTens = (totalSec % 60) / 10;
+  int secOnes = totalSec % 10;
 
-  out[0] = blankLead && mT == 0 ? 0 : segmentMap[mT];
-  out[1] = segmentMap[mO];
-  out[2] = segmentMap[sT];
-  out[3] = segmentMap[sO];
+  out[0] = blankLead && minTens == 0 ? 0 : segmentMap[minTens];
+  out[1] = segmentMap[minOnes];
+  out[2] = segmentMap[secTens];
+  out[3] = segmentMap[secOnes];
   if (colonOn) {
     out[1] |= SEG_DP;
     out[2] |= SEG_DP;

@@ -17,7 +17,7 @@
 #define OFFSET_X 28
 #define OFFSET_Y 24
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
-bool gOledOk = false;
+static bool gOledOk = false;
 static AppState gState;
 static Keypad keypad;
 
@@ -27,7 +27,8 @@ void showSegments(const byte segs[kDigits]);
 const int kDutyNormal = 255 - 204; // ~80%
 const int kDutyDimmed = 255 - 25;  // ~10%
 
-// Digit at position 2 is physically mounted upside-down on the PCB.
+// Digit at position 2 is physically mounted upside-down on the PCB,
+// so that decimal dots can be used as colon for clock display.
 // Swap top/bottom segment pairs (A<->D, B<->E, C<->F) to compensate.
 const byte kFlipMask = 0b0100;
 
