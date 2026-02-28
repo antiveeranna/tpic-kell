@@ -105,9 +105,9 @@ void updateMode(AppState &s, unsigned long now) {
       } else {
         s.displaySec--;
       }
+      buildTimeSegments(s.displayMin, s.displaySec, s.colonOn, true, s.segs);
+      s.segsDirty = true;
     }
-    buildTimeSegments(s.displayMin, s.displaySec, s.colonOn, true, s.segs);
-    s.segsDirty = true;
 
     int totalSec = s.displayMin * 60 + s.displaySec;
     if (totalSec <= 10 && s.mode != MODE_FLASH_ZERO) {
@@ -125,9 +125,9 @@ void updateMode(AppState &s, unsigned long now) {
         s.displaySec = 0;
         s.displayMin++;
       }
+      buildTimeSegments(s.displayMin, s.displaySec, s.colonOn, true, s.segs);
+      s.segsDirty = true;
     }
-    buildTimeSegments(s.displayMin, s.displaySec, s.colonOn, true, s.segs);
-    s.segsDirty = true;
 
     if (s.displayMin >= s.targetMin && s.displaySec == 0 && s.displayMin > 0) {
       s.mode = MODE_FLASH_ZERO;
