@@ -32,6 +32,10 @@ static const char KEYMAP[4][4] = {
   {'D','#','0','*'}
 };
 
+// Brightness duty cycles for /G (active low: higher = dimmer)
+const int kDutyNormal = 255 - 204; // ~80%
+const int kDutyDimmed = 255 - 25;  // ~10%
+
 // Safe without atomic ops: ESP32-C3 is single-core, and bool read/write is atomic on RISC-V.
 volatile bool gKeyPending = false;
 bool gDebouncing = false;
@@ -184,9 +188,8 @@ void setup() {
   // 80% brightness via PWM on /G (active low).
   const int kPwmFreq = 5000;
   const int kPwmResolution = 8;
-  const int kDuty = 255 - 204;
   ledcAttach(TPIC_G, kPwmFreq, kPwmResolution);
-  ledcWrite(TPIC_G, kDuty);
+  ledcWrite(TPIC_G, kDutyNormal);
 
   // OLED Setup
   Wire.begin(5, 6);
@@ -248,6 +251,8 @@ void loop() {
       s.segsDirty = true;
     }
   }
+
+  ledcWrite(TPIC_G, s.paused ? kDutyDimmed : kDutyNormal);
 
   if (s.segsDirty) {
     showSegments(s.segs);
