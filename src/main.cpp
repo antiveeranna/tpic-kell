@@ -6,10 +6,10 @@
 #include "segment_defs.h"
 
 // PIN MAPPING
-#define TPIC_LATCH  1 // 0
-#define TPIC_CLOCK  0 //1
-#define TPIC_G      4 //3
-#define TPIC_DATA   3 //4
+#define TPIC_LATCH  1
+#define TPIC_CLOCK  0
+#define TPIC_G      4
+#define TPIC_DATA   3
 #define KEYPAD_INT  7
 
 // OLED SETTINGS
@@ -245,7 +245,6 @@ void loop() {
     s.oledDirty = false;
   }
 
-#if !KEY_TEST_MODE
   if (s.mode == MODE_IDLE && !gKeyPending) {
     bool blinkOn = (now / 500) % 2 == 0;
     for (int i = 0; i < kDigits; i++) s.segs[i] = 0;
@@ -259,5 +258,4 @@ void loop() {
     }
     s.segsDirty = true;
   }
-#endif
 }

@@ -186,17 +186,6 @@ void handleKey(AppState &s, char key, unsigned long now) {
   if (key == 0) return;
   appendKeyLog(s, key);
 
-#if KEY_TEST_MODE
-  for (int i = 0; i < kDigits; i++) s.segs[i] = 0;
-  s.segs[kDigits - 1] = keyToSegments(key);
-  s.digitBuf[0] = key;
-  s.digitBuf[1] = 0;
-  s.digitBuf[2] = 0;
-  s.digitLen = 1;
-  s.segsDirty = true;
-  return;
-#endif
-
   if (s.mode == MODE_COUNTDOWN || s.mode == MODE_COUNTUP || s.mode == MODE_FLASH_ZERO) {
     if (key == '*' && s.lastKey == '*') {
       s.mode = MODE_IDLE;

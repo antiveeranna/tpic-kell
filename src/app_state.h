@@ -35,10 +35,6 @@ struct AppState {
   bool oledDirty;
 };
 
-#ifndef KEY_TEST_MODE
-#define KEY_TEST_MODE 0
-#endif
-
 void initState(AppState &s);
 void updateMode(AppState &s, unsigned long now);
 void handleKey(AppState &s, char key, unsigned long now);
