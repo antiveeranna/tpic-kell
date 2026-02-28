@@ -17,6 +17,7 @@
 #define OFFSET_Y 24
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
 bool gOledOk = false;
+static AppState gState;
 
 void showSegments(const byte segs[kDigits]);
 
@@ -206,17 +207,12 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(KEYPAD_INT), onKeyInt, FALLING);
   armForInt();
   readPcf();
+  initState(gState);
   playSnakeAnimation();
 }
 
 void loop() {
-  static AppState s;
-  static bool initialized = false;
-  if (!initialized) {
-    initState(s);
-    initialized = true;
-  }
-
+  AppState &s = gState;
   unsigned long now = millis();
 
   updateMode(s, now);
