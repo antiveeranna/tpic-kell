@@ -31,7 +31,9 @@ struct AppState {
   byte segs[kDigits] = {};
   bool segsDirty     = true;
   bool oledDirty     = true;
-  unsigned long lastOled = 0;
+  unsigned long lastOled  = 0;
+  unsigned long blinkBase = 0;
+  bool lastBlink          = false;
 
   // --- Input ---
   char keyLog[9]     = {};
@@ -44,6 +46,5 @@ struct AppState {
   int displaySec() const { return totalSeconds % 60; }
 };
 
-void initState(AppState &s);
 void updateMode(AppState &s, unsigned long now);
 void handleKey(AppState &s, char key, unsigned long now);

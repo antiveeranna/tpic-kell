@@ -16,27 +16,12 @@ static void tickTime(AppState &s, int delta) {
   if (s.totalSeconds < 0) s.totalSeconds = 0;
 }
 
-static byte keyToSegments(char key) {
-  if (key >= '0' && key <= '9') {
-    return segmentMap[key - '0'];
-  }
-  switch (key) {
-    case 'A': return SEG_A | SEG_B | SEG_C | SEG_E | SEG_F | SEG_G;
-    case 'B': return SEG_C | SEG_D | SEG_E | SEG_F | SEG_G;
-    case 'C': return SEG_A | SEG_D | SEG_E | SEG_F;
-    case 'D': return SEG_B | SEG_C | SEG_D | SEG_E | SEG_G;
-    case '*': return SEG_G | SEG_DP;
-    case '#': return SEG_A | SEG_B | SEG_C | SEG_D | SEG_E | SEG_F;
-    default:  return 0;
-  }
-}
-
-static void buildTimeSegments(int minutes, int seconds, bool colonOn,
+static void buildTimeSegments(int totalSec, bool colonOn,
                                bool blankLead, byte out[kDigits]) {
-  int mT = minutes / 10;
-  int mO = minutes % 10;
-  int sT = seconds / 10;
-  int sO = seconds % 10;
+  int mT = totalSec / 600;
+  int mO = (totalSec / 60) % 10;
+  int sT = (totalSec % 60) / 10;
+  int sO = totalSec % 10;
 
   out[0] = blankLead && mT == 0 ? 0 : segmentMap[mT];
   out[1] = segmentMap[mO];
@@ -49,7 +34,7 @@ static void buildTimeSegments(int minutes, int seconds, bool colonOn,
 }
 
 static void updateSegsFromTime(AppState &s) {
-  buildTimeSegments(s.displayMin(), s.displaySec(), s.colonOn, true, s.segs);
+  buildTimeSegments(s.totalSeconds, s.colonOn, true, s.segs);
   s.segsDirty = true;
 }
 
@@ -76,7 +61,7 @@ static void startTimer(AppState &s, bool up, unsigned long now) {
   s.countingUp = up;
   s.paused = false;
   s.prePos = 0;
-  s.lastPhase = now - 1000;
+  s.lastPhase = now - 1000;  // pre-expire so first frame fires immediately
   s.mode = MODE_PRECOUNTDOWN;
   s.postFlashSec = 0;
   s.digitLen = 0;
@@ -86,10 +71,6 @@ static void startTimer(AppState &s, bool up, unsigned long now) {
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
-
-void initState(AppState &s) {
-  s = AppState{};
-}
 
 void updateMode(AppState &s, unsigned long now) {
   if (s.paused) return;
@@ -169,7 +150,24 @@ void updateMode(AppState &s, unsigned long now) {
     break;
   }
 
-  case MODE_IDLE:
+  case MODE_IDLE: {
+    if (s.segsDirty) s.blinkBase = now;
+    bool blinkOn = ((now - s.blinkBase) / 500) % 2 == 0;
+    if (blinkOn != s.lastBlink || s.segsDirty) {
+      s.lastBlink = blinkOn;
+      memset(s.segs, 0, sizeof(s.segs));
+      if (s.digitLen == 0) {
+        if (blinkOn) s.segs[1] = SEG_D;
+      } else if (blinkOn) {
+        int offset = 2 - s.digitLen;
+        for (int i = 0; i < s.digitLen; i++) {
+          s.segs[offset + i] = segmentMap[s.digitBuf[i] - '0'];
+        }
+      }
+      s.segsDirty = true;
+    }
+    break;
+  }
   default:
     break;
   }

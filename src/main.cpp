@@ -27,7 +27,9 @@ void showSegments(const byte segs[kDigits]);
 const int kDutyNormal = 255 - 204; // ~80%
 const int kDutyDimmed = 255 - 25;  // ~10%
 
-const byte kFlipMask = 0b0100; // Flip pos2 (third from left)
+// Digit at position 2 is physically mounted upside-down on the PCB.
+// Swap top/bottom segment pairs (A<->D, B<->E, C<->F) to compensate.
+const byte kFlipMask = 0b0100;
 
 byte rotate180(byte v) {
   byte out = 0;
@@ -130,7 +132,7 @@ void setup() {
   }
 
   keypad.begin(KEYPAD_INT);
-  initState(gState);
+  gState = AppState{};
   playSnakeAnimation();
 }
 
@@ -138,30 +140,10 @@ void loop() {
   AppState &s = gState;
   unsigned long now = millis();
 
-  updateMode(s, now);
-
   char key = keypad.poll();
   if (key) handleKey(s, key, now);
 
-  if (s.mode == MODE_IDLE) {
-    static unsigned long blinkBase = 0;
-    static bool lastBlink = false;
-    if (s.segsDirty) blinkBase = now;
-    bool blinkOn = ((now - blinkBase) / 500) % 2 == 0;
-    if (blinkOn != lastBlink || s.segsDirty) {
-      lastBlink = blinkOn;
-      memset(s.segs, 0, sizeof(s.segs));
-      if (s.digitLen == 0) {
-        if (blinkOn) s.segs[1] = SEG_D;
-      } else if (blinkOn) {
-        int offset = 2 - s.digitLen;
-        for (int i = 0; i < s.digitLen; i++) {
-          s.segs[offset + i] = segmentMap[s.digitBuf[i] - '0'];
-        }
-      }
-      s.segsDirty = true;
-    }
-  }
+  updateMode(s, now);
 
   ledcWrite(TPIC_G, s.paused ? kDutyDimmed : kDutyNormal);
 
