@@ -56,8 +56,7 @@ static int parseEntrySec(const app_state_t *s) {
            parseBuf(s->secBuf,   s->secLen);
 }
 
-static void startTimer(app_state_t *s, bool up, uint32_t now) {
-    int total = parseEntrySec(s);
+static void startTimerWithSec(app_state_t *s, bool up, int total, uint32_t now) {
     s->totalSeconds = up ? 0 : total;
     s->targetSec    = up ? total : 0;
     s->countingUp   = up;
@@ -69,6 +68,11 @@ static void startTimer(app_state_t *s, bool up, uint32_t now) {
     s->secLen       = 0;
     s->enteringSeconds = false;
     s->overrun      = false;
+    s->lastEntrySec = total;
+}
+
+static void startTimer(app_state_t *s, bool up, uint32_t now) {
+    startTimerWithSec(s, up, parseEntrySec(s), now);
 }
 
 // ---------------------------------------------------------------------------
@@ -209,11 +213,32 @@ void updateMode(app_state_t *s, uint32_t now) {
         if (s->segsDirty) s->blinkBase = now;
         uint32_t idleElapsed = now - s->lastActivityTime;
         bool hasInput = s->digitLen > 0 || s->secLen > 0 || s->enteringSeconds;
-        bool quiet = !hasInput && idleElapsed >= IDLE_DIM_MS;
+        bool sleeping = !hasInput && idleElapsed >= IDLE_SLEEP_MS;
+        bool ghost = !hasInput && !sleeping && s->lastEntrySec > 0;
+        bool quiet = !hasInput && !ghost && idleElapsed >= IDLE_DIM_MS;
 
-        if (quiet) {
-            s->targetDuty = (idleElapsed >= IDLE_SLEEP_MS) ? DUTY_FAINT_VAL
-                                                           : DUTY_DIMMED_VAL;
+        if (sleeping) {
+            uint32_t phase = (idleElapsed - IDLE_SLEEP_MS) % 4000u;
+            uint32_t t1024 = (phase < 2000u)
+                ? (phase * 1024u / 2000u)
+                : ((4000u - phase) * 1024u / 2000u);
+            int diff = (int)DUTY_FAINT_VAL - 255;
+            s->targetDuty = (uint8_t)(255 + diff * (int)t1024 / 1024);
+            if (s->lastBlink || s->segsDirty) {
+                s->lastBlink = false;
+                memset(s->segs, 0, sizeof(s->segs));
+                s->segs[1] = SEG_D;
+                s->segsDirty = true;
+            }
+        } else if (ghost) {
+            s->targetDuty = DUTY_DIMMED_VAL;
+            if (s->lastBlink || s->segsDirty) {
+                s->lastBlink = false;
+                buildTimeSegments(s->lastEntrySec, true, true, s->segs);
+                s->segsDirty = true;
+            }
+        } else if (quiet) {
+            s->targetDuty = DUTY_DIMMED_VAL;
             if (s->lastBlink || s->segsDirty) {
                 s->lastBlink = false;
                 memset(s->segs, 0, sizeof(s->segs));
@@ -304,10 +329,14 @@ void handleKey(app_state_t *s, char key, uint32_t now) {
         } else if ((key == 'A' || key == 'B') &&
                    (s->digitLen >= 1 || s->secLen >= 1)) {
             startTimer(s, key == 'B', now);
+        } else if ((key == 'A' || key == 'B') &&
+                   !s->enteringSeconds && s->lastEntrySec > 0) {
+            startTimerWithSec(s, key == 'B', s->lastEntrySec, now);
         } else {
             s->digitLen  = 0;
             s->secLen    = 0;
             s->enteringSeconds = false;
+            s->lastEntrySec = 0;
             s->segsDirty = true;
         }
         break;

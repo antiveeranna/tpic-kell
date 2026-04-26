@@ -51,6 +51,7 @@ typedef struct {
     char     secBuf[3];
     int      secLen;
     bool     enteringSeconds;
+    int      lastEntrySec;
     char     lastKey;
 } app_state_t;
 
