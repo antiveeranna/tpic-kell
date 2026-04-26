@@ -65,7 +65,6 @@ static void startTimer(app_state_t *s, bool up, uint32_t now) {
     s->prePos       = 0;
     s->lastPhase    = now - 1000;
     s->mode         = MODE_PRECOUNTDOWN;
-    s->postFlashSec = 0;
     s->digitLen     = 0;
     s->secLen       = 0;
     s->enteringSeconds = false;
@@ -93,24 +92,62 @@ void updateMode(app_state_t *s, uint32_t now) {
             s->lastPhase = now;
         } else {
             s->lastTick = now;
-            s->colonOn  = false;
+            s->colonOn  = true;
             s->mode     = s->countingUp ? MODE_COUNTUP : MODE_COUNTDOWN;
+            buildTimeSegments(s->totalSeconds, s->colonOn, true, s->segs);
+            s->segsDirty = true;
         }
         break;
     }
 
     case MODE_COUNTDOWN: {
-        if (now - s->lastTick >= 1000) {
+        bool tick = (now - s->lastTick) >= 1000;
+        if (tick && !s->overrun) {
             s->lastTick += 1000;
             s->colonOn = !s->colonOn;
             tickTime(s, -1);
-            updateSegsFromTime(s);
+        } else if (tick) {
+            s->lastTick += 1000;
         }
-        if (s->totalSeconds <= 10) {
-            s->mode        = MODE_FLASH_ZERO;
-            s->postFlashSec = 10;
-            s->flashOn     = true;
-            s->lastPhase   = now;
+        if (!s->overrun && s->totalSeconds <= 0) {
+            s->totalSeconds = 0;
+            s->overrun   = true;
+            s->overrunAt = now;
+            s->flashOn   = true;
+        }
+        bool alerting = s->overrun && (now - s->overrunAt) < 2000;
+        if (alerting) {
+            bool show = (((now - s->overrunAt) / 250) % 2) == 0;
+            if (show != s->flashOn || tick) {
+                s->flashOn = show;
+                if (show) {
+                    buildTimeSegments(s->totalSeconds, s->colonOn, true, s->segs);
+                    s->segs[3] |= SEG_DP;
+                } else {
+                    memset(s->segs, 0, sizeof(s->segs));
+                }
+                s->segsDirty = true;
+            }
+        } else if (tick || (s->overrun && !s->flashOn)) {
+            buildTimeSegments(s->totalSeconds, s->colonOn, true, s->segs);
+            if (s->overrun) {
+                s->segs[3] |= SEG_DP;
+            } else if (s->totalSeconds > 0 && s->totalSeconds <= 10) {
+                s->segs[3] |= SEG_DP;
+            } else if (s->totalSeconds <= 30 && s->colonOn) {
+                s->segs[3] |= SEG_DP;
+            }
+            s->flashOn = true;
+            s->segsDirty = true;
+        }
+        if (s->overrun && !alerting) {
+            uint32_t phase = (now - s->overrunAt - 2000u) % 3000u;
+            uint32_t t1024 = (phase < 1500u)
+                ? (phase * 1024u / 1500u)
+                : ((3000u - phase) * 1024u / 1500u);
+            int diff = (int)DUTY_DIMMED_VAL - (int)DUTY_NORMAL_VAL;
+            s->targetDuty = (uint8_t)((int)DUTY_NORMAL_VAL +
+                                      diff * (int)t1024 / 1024);
         }
         break;
     }
@@ -164,32 +201,6 @@ void updateMode(app_state_t *s, uint32_t now) {
             int diff = (int)DUTY_DIMMED_VAL - (int)DUTY_NORMAL_VAL;
             s->targetDuty = (uint8_t)((int)DUTY_NORMAL_VAL +
                                       diff * (int)t1024 / 1024);
-        }
-        break;
-    }
-
-    case MODE_FLASH_ZERO: {
-        if (now - s->lastPhase >= 250) {
-            s->lastPhase = now;
-            s->flashOn   = !s->flashOn;
-            if (s->flashOn) {
-                updateSegsFromTime(s);
-            } else {
-                clearSegs(s);
-            }
-        }
-        if (now - s->lastTick >= 1000) {
-            s->lastTick += 1000;
-            s->colonOn = !s->colonOn;
-            if (!s->countingUp) {
-                tickTime(s, -1);
-            }
-            if (s->postFlashSec > 0) s->postFlashSec--;
-        }
-        if (s->postFlashSec == 0) {
-            s->mode = MODE_IDLE;
-            s->lastActivityTime = now;
-            clearSegs(s);
         }
         break;
     }
@@ -258,7 +269,6 @@ void handleKey(app_state_t *s, char key, uint32_t now) {
 
     case MODE_COUNTDOWN:
     case MODE_COUNTUP:
-    case MODE_FLASH_ZERO:
         if (key == '*' && s->lastKey == '*') {
             s->mode     = MODE_IDLE;
             s->paused   = false;

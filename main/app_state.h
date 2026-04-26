@@ -17,8 +17,7 @@ typedef enum {
     MODE_IDLE,
     MODE_PRECOUNTDOWN,
     MODE_COUNTDOWN,
-    MODE_COUNTUP,
-    MODE_FLASH_ZERO
+    MODE_COUNTUP
 } mode_t;
 
 typedef struct {
@@ -32,7 +31,6 @@ typedef struct {
     bool     paused;
     bool     colonOn;
     bool     flashOn;
-    int      postFlashSec;
     int      prePos;
     uint32_t lastTick;
     uint32_t lastPhase;
