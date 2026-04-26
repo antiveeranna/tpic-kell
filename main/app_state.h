@@ -27,7 +27,7 @@ typedef struct {
 
     // Timing
     int      totalSeconds;
-    int      targetMin;
+    int      targetSec;
     bool     countingUp;
     bool     paused;
     bool     colonOn;
@@ -50,6 +50,9 @@ typedef struct {
     // Input
     char     digitBuf[3];
     int      digitLen;
+    char     secBuf[3];
+    int      secLen;
+    bool     enteringSeconds;
     char     lastKey;
 } app_state_t;
 

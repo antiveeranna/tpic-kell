@@ -45,15 +45,21 @@ static void updateSegsFromTime(app_state_t *s) {
     s->segsDirty = true;
 }
 
-static int parseDigits(const app_state_t *s) {
-    if (s->digitLen == 1) return s->digitBuf[0] - '0';
-    return (s->digitBuf[0] - '0') * 10 + (s->digitBuf[1] - '0');
+static int parseBuf(const char *buf, int len) {
+    if (len == 1) return buf[0] - '0';
+    if (len == 2) return (buf[0] - '0') * 10 + (buf[1] - '0');
+    return 0;
+}
+
+static int parseEntrySec(const app_state_t *s) {
+    return parseBuf(s->digitBuf, s->digitLen) * 60 +
+           parseBuf(s->secBuf,   s->secLen);
 }
 
 static void startTimer(app_state_t *s, bool up, uint32_t now) {
-    int mins = parseDigits(s);
-    s->totalSeconds = up ? 0 : mins * 60;
-    s->targetMin    = up ? mins : 0;
+    int total = parseEntrySec(s);
+    s->totalSeconds = up ? 0 : total;
+    s->targetSec    = up ? total : 0;
     s->countingUp   = up;
     s->paused       = false;
     s->prePos       = 0;
@@ -61,6 +67,8 @@ static void startTimer(app_state_t *s, bool up, uint32_t now) {
     s->mode         = MODE_PRECOUNTDOWN;
     s->postFlashSec = 0;
     s->digitLen     = 0;
+    s->secLen       = 0;
+    s->enteringSeconds = false;
     s->overrun      = false;
 }
 
@@ -114,8 +122,8 @@ void updateMode(app_state_t *s, uint32_t now) {
             s->colonOn = !s->colonOn;
             tickTime(s, +1);
         }
-        if (!s->overrun && s->targetMin > 0 &&
-            s->totalSeconds >= s->targetMin * 60) {
+        if (!s->overrun && s->targetSec > 0 &&
+            s->totalSeconds >= s->targetSec) {
             s->overrun   = true;
             s->overrunAt = now;
             s->flashOn   = true;
@@ -137,8 +145,8 @@ void updateMode(app_state_t *s, uint32_t now) {
             buildTimeSegments(s->totalSeconds, s->colonOn, true, s->segs);
             if (s->overrun) {
                 s->segs[3] |= SEG_DP;
-            } else if (s->targetMin > 0) {
-                int remain = s->targetMin * 60 - s->totalSeconds;
+            } else if (s->targetSec > 0) {
+                int remain = s->targetSec - s->totalSeconds;
                 if (remain > 0 && remain <= 10) {
                     s->segs[3] |= SEG_DP;
                 } else if (remain <= 30 && s->colonOn) {
@@ -189,7 +197,8 @@ void updateMode(app_state_t *s, uint32_t now) {
     case MODE_IDLE: {
         if (s->segsDirty) s->blinkBase = now;
         uint32_t idleElapsed = now - s->lastActivityTime;
-        bool quiet = s->digitLen == 0 && idleElapsed >= IDLE_DIM_MS;
+        bool hasInput = s->digitLen > 0 || s->secLen > 0 || s->enteringSeconds;
+        bool quiet = !hasInput && idleElapsed >= IDLE_DIM_MS;
 
         if (quiet) {
             s->targetDuty = (idleElapsed >= IDLE_SLEEP_MS) ? DUTY_FAINT_VAL
@@ -205,12 +214,19 @@ void updateMode(app_state_t *s, uint32_t now) {
             if (blinkOn != s->lastBlink || s->segsDirty) {
                 s->lastBlink = blinkOn;
                 memset(s->segs, 0, sizeof(s->segs));
-                if (s->digitLen == 0) {
+                if (!hasInput) {
                     if (blinkOn) s->segs[1] = SEG_D;
                 } else if (blinkOn) {
                     int offset = 2 - s->digitLen;
                     for (int i = 0; i < s->digitLen; i++) {
                         s->segs[offset + i] = segmentMap[s->digitBuf[i] - '0'];
+                    }
+                    for (int i = 0; i < s->secLen; i++) {
+                        s->segs[2 + i] = segmentMap[s->secBuf[i] - '0'];
+                    }
+                    if (s->enteringSeconds) {
+                        s->segs[1] |= SEG_DP;
+                        s->segs[2] |= SEG_DP;
                     }
                 }
                 s->segsDirty = true;
@@ -234,6 +250,8 @@ void handleKey(app_state_t *s, char key, uint32_t now) {
     case MODE_PRECOUNTDOWN:
         s->mode     = MODE_IDLE;
         s->digitLen = 0;
+        s->secLen   = 0;
+        s->enteringSeconds = false;
         clearSegs(s);
         s->lastKey = key;
         return;
@@ -245,6 +263,8 @@ void handleKey(app_state_t *s, char key, uint32_t now) {
             s->mode     = MODE_IDLE;
             s->paused   = false;
             s->digitLen = 0;
+            s->secLen   = 0;
+            s->enteringSeconds = false;
             s->overrun  = false;
             clearSegs(s);
         } else {
@@ -259,19 +279,25 @@ void handleKey(app_state_t *s, char key, uint32_t now) {
 
     case MODE_IDLE:
         if (key >= '0' && key <= '9') {
-            if (s->digitLen < 2) {
-                s->digitBuf[s->digitLen++] = key;
+            char *buf = s->enteringSeconds ? s->secBuf  : s->digitBuf;
+            int  *len = s->enteringSeconds ? &s->secLen : &s->digitLen;
+            if (*len < 2) {
+                buf[(*len)++] = key;
             } else {
-                s->digitBuf[0] = s->digitBuf[1];
-                s->digitBuf[1] = key;
+                buf[0] = buf[1];
+                buf[1] = key;
             }
             s->segsDirty = true;
-        } else if (key == 'A' && s->digitLen >= 1) {
-            startTimer(s, false, now);
-        } else if (key == 'B' && s->digitLen >= 1) {
-            startTimer(s, true, now);
+        } else if (key == '#') {
+            s->enteringSeconds = true;
+            s->segsDirty = true;
+        } else if ((key == 'A' || key == 'B') &&
+                   (s->digitLen >= 1 || s->secLen >= 1)) {
+            startTimer(s, key == 'B', now);
         } else {
             s->digitLen  = 0;
+            s->secLen    = 0;
+            s->enteringSeconds = false;
             s->segsDirty = true;
         }
         break;
