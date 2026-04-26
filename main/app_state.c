@@ -7,6 +7,27 @@ void app_state_init(app_state_t *s) {
     s->flashOn    = true;
     s->segsDirty  = true;
     s->targetDuty = DUTY_NORMAL_VAL;
+    s->presetIdx  = -1;
+}
+
+static const int kPresets[] = { 30, 60, 90, 120, 180, 300 };
+#define kPresetCount ((int)(sizeof(kPresets) / sizeof(kPresets[0])))
+
+static void loadPreset(app_state_t *s, int total) {
+    int mins = total / 60;
+    int secs = total % 60;
+    if (mins >= 10) {
+        s->digitBuf[0] = '0' + (mins / 10);
+        s->digitBuf[1] = '0' + (mins % 10);
+        s->digitLen    = 2;
+    } else {
+        s->digitBuf[0] = '0' + mins;
+        s->digitLen    = 1;
+    }
+    s->secBuf[0] = '0' + (secs / 10);
+    s->secBuf[1] = '0' + (secs % 10);
+    s->secLen    = 2;
+    s->enteringSeconds = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -69,6 +90,7 @@ static void startTimerWithSec(app_state_t *s, bool up, int total, uint32_t now) 
     s->enteringSeconds = false;
     s->overrun      = false;
     s->lastEntrySec = total;
+    s->presetIdx    = -1;
 }
 
 static void startTimer(app_state_t *s, bool up, uint32_t now) {
@@ -259,6 +281,23 @@ void updateMode(app_state_t *s, uint32_t now) {
                 s->segs[1] = SEG_D;
                 s->segsDirty = true;
             }
+        } else if (s->presetIdx >= 0) {
+            if (s->lastBlink || s->segsDirty) {
+                s->lastBlink = false;
+                memset(s->segs, 0, sizeof(s->segs));
+                int offset = 2 - s->digitLen;
+                for (int i = 0; i < s->digitLen; i++) {
+                    s->segs[offset + i] = segmentMap[s->digitBuf[i] - '0'];
+                }
+                for (int i = 0; i < s->secLen; i++) {
+                    s->segs[2 + i] = segmentMap[s->secBuf[i] - '0'];
+                }
+                if (s->enteringSeconds) {
+                    s->segs[1] |= SEG_DP;
+                    s->segs[2] |= SEG_DP;
+                }
+                s->segsDirty = true;
+            }
         } else {
             bool blinkOn = ((now - s->blinkBase) / 500) % 2 == 0;
             if (blinkOn != s->lastBlink || s->segsDirty) {
@@ -302,6 +341,7 @@ void handleKey(app_state_t *s, char key, uint32_t now) {
         s->digitLen = 0;
         s->secLen   = 0;
         s->enteringSeconds = false;
+        s->presetIdx = -1;
         clearSegs(s);
         s->lastKey = key;
         return;
@@ -314,6 +354,7 @@ void handleKey(app_state_t *s, char key, uint32_t now) {
             s->digitLen = 0;
             s->secLen   = 0;
             s->enteringSeconds = false;
+            s->presetIdx = -1;
             s->overrun  = false;
             clearSegs(s);
         } else {
@@ -328,6 +369,12 @@ void handleKey(app_state_t *s, char key, uint32_t now) {
 
     case MODE_IDLE:
         if (key >= '0' && key <= '9') {
+            if (s->presetIdx >= 0) {
+                s->digitLen = 0;
+                s->secLen   = 0;
+                s->enteringSeconds = false;
+                s->presetIdx = -1;
+            }
             char *buf = s->enteringSeconds ? s->secBuf  : s->digitBuf;
             int  *len = s->enteringSeconds ? &s->secLen : &s->digitLen;
             if (*len < 2) {
@@ -338,7 +385,22 @@ void handleKey(app_state_t *s, char key, uint32_t now) {
             }
             s->segsDirty = true;
         } else if (key == '#') {
+            if (s->presetIdx >= 0) {
+                s->digitLen = 0;
+                s->secLen   = 0;
+                s->presetIdx = -1;
+            }
             s->enteringSeconds = true;
+            s->segsDirty = true;
+        } else if (key == 'C') {
+            s->presetIdx = (s->presetIdx + 1) % kPresetCount;
+            loadPreset(s, kPresets[s->presetIdx]);
+            s->segsDirty = true;
+        } else if (key == 'D') {
+            s->presetIdx = (s->presetIdx <= 0)
+                ? kPresetCount - 1
+                : s->presetIdx - 1;
+            loadPreset(s, kPresets[s->presetIdx]);
             s->segsDirty = true;
         } else if ((key == 'A' || key == 'B') &&
                    (s->digitLen >= 1 || s->secLen >= 1)) {
@@ -351,6 +413,7 @@ void handleKey(app_state_t *s, char key, uint32_t now) {
             s->secLen    = 0;
             s->enteringSeconds = false;
             s->lastEntrySec = 0;
+            s->presetIdx = -1;
             s->segsDirty = true;
         }
         break;

@@ -52,6 +52,7 @@ typedef struct {
     int      secLen;
     bool     enteringSeconds;
     int      lastEntrySec;
+    int      presetIdx;
     char     lastKey;
 } app_state_t;
 
