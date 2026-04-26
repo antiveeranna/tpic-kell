@@ -87,14 +87,28 @@ void updateMode(app_state_t *s, uint32_t now) {
     switch (s->mode) {
 
     case MODE_PRECOUNTDOWN: {
-        if (now - s->lastPhase < 1000) break;
-        if (s->prePos < kDigits) {
-            clearSegs(s);
-            s->segs[s->prePos] = segmentMap[3 - s->prePos];
+        static const uint8_t line[3] = { SEG_D, SEG_G, SEG_A };
+        const int walkSteps = 3;
+        const int lineSteps = 3;
+        const int totalSteps = walkSteps + lineSteps;
+
+        if (s->prePos < totalSteps) {
+            uint32_t gate = (s->prePos < walkSteps) ? 1000 : 250;
+            if (now - s->lastPhase < gate) break;
+            if (s->prePos < walkSteps) {
+                clearSegs(s);
+                s->segs[s->prePos] = segmentMap[3 - s->prePos];
+            } else {
+                uint8_t row = line[s->prePos - walkSteps];
+                for (int i = 0; i < kDigits; i++) {
+                    s->segs[i] = row;
+                }
+            }
             s->segsDirty = true;
             s->prePos++;
             s->lastPhase = now;
         } else {
+            if (now - s->lastPhase < 250) break;
             s->lastTick = now;
             s->colonOn  = true;
             s->mode     = s->countingUp ? MODE_COUNTUP : MODE_COUNTDOWN;
