@@ -17,12 +17,12 @@
 
 // Pin mapping
 #define TPIC_DATA   GPIO_NUM_3
-#define TPIC_CLOCK  GPIO_NUM_4
-#define TPIC_LATCH  GPIO_NUM_5
-#define TPIC_G      GPIO_NUM_6
-#define I2C_SCL     GPIO_NUM_7
-#define I2C_SDA     GPIO_NUM_8
-#define KEYPAD_INT  GPIO_NUM_10
+#define TPIC_CLOCK  GPIO_NUM_0 
+#define TPIC_LATCH  GPIO_NUM_1
+#define TPIC_G      GPIO_NUM_4 
+#define I2C_SCL     GPIO_NUM_6
+#define I2C_SDA     GPIO_NUM_5
+#define KEYPAD_INT  GPIO_NUM_7
 
 // Brightness duty cycles for /G (active low: higher = dimmer)
 #define DUTY_NORMAL (255 - 204)  // ~80%
