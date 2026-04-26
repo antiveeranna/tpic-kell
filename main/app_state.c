@@ -3,9 +3,10 @@
 
 void app_state_init(app_state_t *s) {
     memset(s, 0, sizeof(*s));
-    s->mode     = MODE_IDLE;
-    s->flashOn  = true;
-    s->segsDirty = true;
+    s->mode       = MODE_IDLE;
+    s->flashOn    = true;
+    s->segsDirty  = true;
+    s->targetDuty = DUTY_NORMAL_VAL;
 }
 
 // ---------------------------------------------------------------------------
@@ -60,6 +61,7 @@ static void startTimer(app_state_t *s, bool up, uint32_t now) {
     s->mode         = MODE_PRECOUNTDOWN;
     s->postFlashSec = 0;
     s->digitLen     = 0;
+    s->overrun      = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -68,6 +70,8 @@ static void startTimer(app_state_t *s, bool up, uint32_t now) {
 
 void updateMode(app_state_t *s, uint32_t now) {
     if (s->paused) return;
+
+    s->targetDuty = DUTY_NORMAL_VAL;
 
     switch (s->mode) {
 
@@ -104,17 +108,54 @@ void updateMode(app_state_t *s, uint32_t now) {
     }
 
     case MODE_COUNTUP: {
-        if (now - s->lastTick >= 1000) {
+        bool tick = (now - s->lastTick) >= 1000;
+        if (tick) {
             s->lastTick += 1000;
             s->colonOn = !s->colonOn;
             tickTime(s, +1);
-            updateSegsFromTime(s);
         }
-        if (s->targetMin > 0 && s->totalSeconds >= s->targetMin * 60) {
-            s->mode        = MODE_FLASH_ZERO;
-            s->postFlashSec = 10;
-            s->flashOn     = true;
-            s->lastPhase   = now;
+        if (!s->overrun && s->targetMin > 0 &&
+            s->totalSeconds >= s->targetMin * 60) {
+            s->overrun   = true;
+            s->overrunAt = now;
+            s->flashOn   = true;
+        }
+        bool alerting = s->overrun && (now - s->overrunAt) < 2000;
+        if (alerting) {
+            bool show = (((now - s->overrunAt) / 250) % 2) == 0;
+            if (show != s->flashOn || tick) {
+                s->flashOn = show;
+                if (show) {
+                    buildTimeSegments(s->totalSeconds, s->colonOn, true, s->segs);
+                    s->segs[3] |= SEG_DP;
+                } else {
+                    memset(s->segs, 0, sizeof(s->segs));
+                }
+                s->segsDirty = true;
+            }
+        } else if (tick || (s->overrun && !s->flashOn)) {
+            buildTimeSegments(s->totalSeconds, s->colonOn, true, s->segs);
+            if (s->overrun) {
+                s->segs[3] |= SEG_DP;
+            } else if (s->targetMin > 0) {
+                int remain = s->targetMin * 60 - s->totalSeconds;
+                if (remain > 0 && remain <= 10) {
+                    s->segs[3] |= SEG_DP;
+                } else if (remain <= 30 && s->colonOn) {
+                    s->segs[3] |= SEG_DP;
+                }
+            }
+            s->flashOn = true;
+            s->segsDirty = true;
+        }
+        if (s->overrun && !alerting) {
+            uint32_t phase = (now - s->overrunAt - 2000u) % 3000u;
+            uint32_t t1024 = (phase < 1500u)
+                ? (phase * 1024u / 1500u)
+                : ((3000u - phase) * 1024u / 1500u);
+            int diff = (int)DUTY_DIMMED_VAL - (int)DUTY_NORMAL_VAL;
+            s->targetDuty = (uint8_t)((int)DUTY_NORMAL_VAL +
+                                      diff * (int)t1024 / 1024);
         }
         break;
     }
@@ -139,6 +180,7 @@ void updateMode(app_state_t *s, uint32_t now) {
         }
         if (s->postFlashSec == 0) {
             s->mode = MODE_IDLE;
+            s->lastActivityTime = now;
             clearSegs(s);
         }
         break;
@@ -146,19 +188,33 @@ void updateMode(app_state_t *s, uint32_t now) {
 
     case MODE_IDLE: {
         if (s->segsDirty) s->blinkBase = now;
-        bool blinkOn = ((now - s->blinkBase) / 500) % 2 == 0;
-        if (blinkOn != s->lastBlink || s->segsDirty) {
-            s->lastBlink = blinkOn;
-            memset(s->segs, 0, sizeof(s->segs));
-            if (s->digitLen == 0) {
-                if (blinkOn) s->segs[1] = SEG_D;
-            } else if (blinkOn) {
-                int offset = 2 - s->digitLen;
-                for (int i = 0; i < s->digitLen; i++) {
-                    s->segs[offset + i] = segmentMap[s->digitBuf[i] - '0'];
-                }
+        uint32_t idleElapsed = now - s->lastActivityTime;
+        bool quiet = s->digitLen == 0 && idleElapsed >= IDLE_DIM_MS;
+
+        if (quiet) {
+            s->targetDuty = (idleElapsed >= IDLE_SLEEP_MS) ? DUTY_FAINT_VAL
+                                                           : DUTY_DIMMED_VAL;
+            if (s->lastBlink || s->segsDirty) {
+                s->lastBlink = false;
+                memset(s->segs, 0, sizeof(s->segs));
+                s->segs[1] = SEG_D;
+                s->segsDirty = true;
             }
-            s->segsDirty = true;
+        } else {
+            bool blinkOn = ((now - s->blinkBase) / 500) % 2 == 0;
+            if (blinkOn != s->lastBlink || s->segsDirty) {
+                s->lastBlink = blinkOn;
+                memset(s->segs, 0, sizeof(s->segs));
+                if (s->digitLen == 0) {
+                    if (blinkOn) s->segs[1] = SEG_D;
+                } else if (blinkOn) {
+                    int offset = 2 - s->digitLen;
+                    for (int i = 0; i < s->digitLen; i++) {
+                        s->segs[offset + i] = segmentMap[s->digitBuf[i] - '0'];
+                    }
+                }
+                s->segsDirty = true;
+            }
         }
         break;
     }
@@ -170,6 +226,8 @@ void updateMode(app_state_t *s, uint32_t now) {
 
 void handleKey(app_state_t *s, char key, uint32_t now) {
     if (key == 0) return;
+    s->lastActivityTime = now;
+    s->segsDirty = true;
 
     switch (s->mode) {
 
@@ -187,6 +245,7 @@ void handleKey(app_state_t *s, char key, uint32_t now) {
             s->mode     = MODE_IDLE;
             s->paused   = false;
             s->digitLen = 0;
+            s->overrun  = false;
             clearSegs(s);
         } else {
             s->paused = !s->paused;

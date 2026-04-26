@@ -24,9 +24,10 @@
 #define I2C_SDA     GPIO_NUM_5
 #define KEYPAD_INT  GPIO_NUM_7
 
-// Brightness duty cycles for /G (active low: higher = dimmer)
-#define DUTY_NORMAL (255 - 204)  // ~80%
-#define DUTY_DIMMED (255 - 25)   // ~10%
+// Brightness duty cycles for /G (active low: higher = dimmer).
+// Values shared with app_state.h so the state machine can drive PWM.
+#define DUTY_NORMAL DUTY_NORMAL_VAL
+#define DUTY_DIMMED DUTY_DIMMED_VAL
 
 // Digit at position 2 is physically mounted upside-down on the PCB.
 #define FLIP_MASK 0b0100
@@ -151,7 +152,7 @@ void app_main(void) {
 
         updateMode(&g_state, now);
 
-        set_brightness(g_state.paused ? DUTY_DIMMED : DUTY_NORMAL);
+        set_brightness(g_state.paused ? DUTY_DIMMED : g_state.targetDuty);
 
         if (g_state.segsDirty) {
             show_segments(g_state.segs);
